@@ -10,7 +10,7 @@ st.set_page_config(
 )
 
 # Demo dashboard - belum memakai data pasar real-time
-st.title("🥇 GOLD AI AGENT")
+st.title("1817712cb3484fe1ad458ee262603697")
 st.caption("QUANT RESEARCH | TEST MODE | SIGNAL ONLY")
 
 # Buat data candle simulasi
