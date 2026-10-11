@@ -1,6 +1,8 @@
+
+import os
+import requests
 import streamlit as st
 import pandas as pd
-import numpy as np
 import plotly.graph_objects as go
 
 st.set_page_config(
@@ -9,106 +11,89 @@ st.set_page_config(
     layout="wide"
 )
 
-# Demo dashboard - belum memakai data pasar real-time
 st.title("🥇 GOLD AI AGENT")
 st.caption("QUANT RESEARCH | TEST MODE | SIGNAL ONLY")
 
-# Buat data candle simulasi
-rng = np.random.default_rng(42)
-n = 100
-dates = pd.date_range(
-    end=pd.Timestamp.now().floor("min"),
-    periods=n,
-    freq="min"
-)
+# Baca API key dari Streamlit Secrets
+try:
+    API_KEY = st.secrets["TWELVE_DATA_API_KEY"]
+except Exception:
+    API_KEY = os.getenv("TWELVE_DATA_API_KEY", "")
 
-close = 4000 + np.cumsum(rng.normal(0, 2, n))
-open_ = np.r_[close[0], close[:-1]]
-high = np.maximum(open_, close) + rng.uniform(0.2, 2, n)
-low = np.minimum(open_, close) - rng.uniform(0.2, 2, n)
 
-df = pd.DataFrame({
-    "Time": dates,
-    "Open": open_,
-    "High": high,
-    "Low": low,
-    "Close": close
-})
+@st.cache_data(ttl=60)
+def get_candles(api_key, interval="1min"):
+    url = "https://api.twelvedata.com/time_series"
+    params = {
+        "symbol": "XAU/USD",
+        "interval": interval,
+        "outputsize": 100,
+        "apikey": api_key,
+        "format": "JSON"
+    }
 
-# Ringkasan
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("SYMBOL", "XAU/USD")
-c2.metric("LAST PRICE", f"{close[-1]:.2f}")
-c3.metric("TIMEFRAME", "M1 DEMO")
-c4.metric("TRADING MODE", "SIGNAL ONLY")
+    response = requests.get(url, params=params, timeout=20)
+    response.raise_for_status()
+    result = response.json()
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 Grafik",
-    "🧮 Quant",
-    "🔬 Research",
-    "📈 Performance",
-    "🎯 Signal"
-])
+    if "values" not in result:
+        raise ValueError(
+            result.get("message", "Data candle tidak tersedia")
+        )
 
-with tab1:
-    st.subheader("Candlestick Chart")
-    fig = go.Figure(data=[go.Candlestick(
-        x=df["Time"],
-        open=df["Open"],
-        high=df["High"],
-        low=df["Low"],
-        close=df["Close"],
-        name="Demo XAU/USD"
-    )])
-    fig.update_layout(
-        template="plotly_dark",
-        height=480,
-        xaxis_rangeslider_visible=False,
-        margin=dict(l=10, r=10, t=20, b=10)
+    df = pd.DataFrame(result["values"])
+    df["datetime"] = pd.to_datetime(df["datetime"])
+
+    for col in ["open", "high", "low", "close"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    return df.dropna().sort_values("datetime")
+
+
+if not API_KEY:
+    st.warning(
+        "API key belum dipasang. Buka Manage app > Settings > Secrets."
     )
-    st.plotly_chart(
-        fig, use_container_width=True
-    )
-    st.caption(
-        "Harga simulasi, bukan harga pasar."
+else:
+    interval = st.selectbox(
+        "Timeframe candle",
+        ["1min", "5min", "15min", "1h"],
+        index=2
     )
 
-with tab2:
-    st.subheader("Quant Overview")
-    returns = pd.Series(close).pct_change().dropna()
-    st.metric("Momentum 10 candle",
-              f"{close[-1] - close[-11]:.2f}")
-    st.metric("Volatilitas return",
-              f"{returns.std() * 100:.4f}%")
-    st.write("Data ini hanya untuk menguji tampilan.")
+    if st.button("🔄 Refresh data"):
+        st.cache_data.clear()
 
-with tab3:
-    st.subheader("Research Lab")
-    st.write("Modul pengujian strategi")
-    st.info("Belum ada hasil backtest nyata.")
-    st.write("Nanti: factor analysis, walk-forward, OOS.")
+    try:
+        df = get_candles(API_KEY, interval)
 
-with tab4:
-    st.subheader("Performance")
-    a, b, c = st.columns(3)
-    a.metric("Win Rate", "Belum tersedia")
-    b.metric("Expectancy", "Belum tersedia")
-    c.metric("Max Drawdown", "Belum tersedia")
-    st.write("Statistik akan diisi dari jurnal transaksi.")
+        st.success("Data berhasil diterima dari Twelve Data")
+        st.metric(
+            "Harga candle terakhir",
+            f'{df["close"].iloc[-1]:,.2f}'
+        )
+        st.caption(
+            f'Waktu candle: {df["datetime"].iloc[-1]}'
+        )
 
-with tab5:
-    st.subheader("Signal Center")
-    st.warning("MODE DEMO — bukan sinyal trading")
-    st.write("BUY / SELL: belum diaktifkan")
-    st.write("Entry: —")
-    st.write("Stop Loss: —")
-    st.write("Take Profit: —")
-    st.write("Auto-order: OFF")
+        fig = go.Figure(data=[
+            go.Candlestick(
+                x=df["datetime"],
+                open=df["open"],
+                high=df["high"],
+                low=df["low"],
+                close=df["close"],
+                name="XAU/USD"
+            )
+        ])
 
-    if st.button("TEST DASHBOARD"):
-        st.success("Tombol berfungsi! Dashboard berjalan.")
+        fig.update_layout(
+            title=f"XAU/USD — {interval}",
+            xaxis_rangeslider_visible=False,
+            height=550
+        )
 
-st.divider()
-st.caption(
-    "Gold AI Agent | Prototype v0.1 | Signal-only"
-)
+        st.plotly_chart(fig, use_container_width=True)
+
+    except Exception as e:
+        st.error(f"Gagal mengambil data: {e}")
